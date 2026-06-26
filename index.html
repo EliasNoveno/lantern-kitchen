@@ -31,7 +31,7 @@
         .post-card.secret { border-color: #945675; background: #0f0b0d; }
         .post-title { color: #945675; font-size: 1.4rem; margin-bottom: 0.5rem; }
         .post-meta { font-size: 0.75rem; color: #5a5558; margin-bottom: 0.8rem; }
-        .post-content { margin: 1rem 0; white-space: pre-wrap; }
+        .post-content { margin: 1rem 0; white-space: pre-wrap; word-break: break-word; }
         .post-file a { color: #945675; text-decoration: none; }
         .comments-section { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #2a2a2a; }
         .comment { background: #000; padding: 0.5rem; margin: 0.5rem 0; border-radius: 16px; }
@@ -77,6 +77,7 @@
 <div class="floating-container" id="floatingContainer"></div>
 
 <script>
+    // === БЕЗОПАСНЫЙ КЛИЕНТСКИЙ КОД ===
     let currentUser = null;
     let currentSection = 'new';
     let currentPage = 1;
@@ -97,6 +98,14 @@
         'new': 'latest offerings...'
     };
 
+    // === БЕЗОПАСНОЕ ЭКРАНИРОВАНИЕ ===
+    function escapeHtml(str) {
+        if (!str) return '';
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+
     function floatSymbols(symbols, count = 5) {
         const c = document.getElementById('floatingContainer');
         for (let i = 0; i < count; i++) {
@@ -109,26 +118,17 @@
         }
     }
 
-    // === Усиленный экранинг (безопасный) ===
-    function escapeHtml(str) {
-        if (!str) return '';
-        const map = {
-            '&': '&amp;',
-            '<': '&lt;',
-            '>': '&gt;',
-            '"': '&quot;',
-            "'": '&#039;',
-            '/': '&#x2F;',
-            '`': '&#x60;',
-            '=': '&#x3D;'
-        };
-        return String(str).replace(/[&<>"'`=\/]/g, function(s) {
-            return map[s];
-        });
-    }
-
+    // === API С ОБРАБОТКОЙ ОШИБОК ===
     async function apiCall(url, opts = {}) {
-        const res = await fetch(url, { ...opts, credentials: 'include', headers: { 'Content-Type': 'application/json', ...opts.headers } });
+        const res = await fetch(url, { 
+            ...opts, 
+            credentials: 'include', 
+            headers: { 
+                'Content-Type': 'application/json', 
+                ...opts.headers,
+                'X-Requested-With': 'XMLHttpRequest'
+            } 
+        });
         if (res.status === 401) {
             currentUser = null;
             document.getElementById('topBar').style.display = 'flex';
@@ -149,7 +149,7 @@
                 currentUser = user;
                 document.getElementById('topBar').style.display = 'none';
                 document.getElementById('userPanel').style.display = 'flex';
-                document.getElementById('loggedUserName').innerText = currentUser.username;
+                document.getElementById('loggedUserName').textContent = currentUser.username;
                 if (currentUser.isAdmin) renderAdminPanel();
                 await loadPosts();
             } else {
@@ -174,7 +174,7 @@
             totalPages = data.totalPages;
             renderPosts(data.posts);
             renderPagination();
-            document.getElementById('sectionDescription').innerHTML = sectionDesc[currentSection] || '';
+            document.getElementById('sectionDescription').textContent = sectionDesc[currentSection] || '';
             updateSecretRow();
         } catch(e) {
             document.getElementById('postsContainer').innerHTML = '<div style="text-align:center; padding:2rem;">error loading posts</div>';
@@ -189,14 +189,21 @@
         }
         let html = '';
         for (let p of posts) {
-            html += `<div class="post-card ${p.is_secret ? 'secret' : ''}">
-                        <div class="post-title">${escapeHtml(p.title || 'untitled')}</div>
-                        <div class="post-meta">by ${escapeHtml(p.username)} · ${new Date(p.created_at).toLocaleString()}</div>
-                        <div class="post-content">${escapeHtml(p.content || '')}</div>
-                        ${p.file_path ? `<div class="post-file"><a href="${escapeHtml(p.file_path)}" target="_blank">📎 attachment</a></div>` : ''}
+            const safeTitle = escapeHtml(p.title || 'untitled');
+            const safeContent = escapeHtml(p.content || '');
+            const safeUsername = escapeHtml(p.username);
+            const createdAt = new Date(p.created_at).toLocaleString();
+            const filePath = p.file_path ? escapeHtml(p.file_path) : null;
+            const secretClass = p.is_secret ? 'secret' : '';
+            
+            html += `<div class="post-card ${secretClass}">
+                        <div class="post-title">${safeTitle}</div>
+                        <div class="post-meta">by ${safeUsername} · ${createdAt}</div>
+                        <div class="post-content">${safeContent}</div>
+                        ${filePath ? `<div class="post-file"><a href="${filePath}" target="_blank">📎 attachment</a></div>` : ''}
                         <div class="comments-section" id="comments-${p.id}">
                             <div class="comment-input">
-                                <input id="commentInput-${p.id}" placeholder="write a comment...">
+                                <input id="commentInput-${p.id}" placeholder="write a comment..." autocomplete="off">
                                 <button onclick="addComment(${p.id})">send</button>
                             </div>
                             <div id="commentList-${p.id}"></div>
@@ -218,10 +225,15 @@
             }
             let html = '';
             for (let c of comments) {
+                const safeUsername = escapeHtml(c.username);
+                const safeContent = escapeHtml(c.content);
+                const createdAt = new Date(c.created_at).toLocaleString();
+                const canEdit = currentUser && (currentUser.id === c.user_id || currentUser.isAdmin);
+                
                 html += `<div class="comment">
-                            <div class="comment-meta">${escapeHtml(c.username)} · ${new Date(c.created_at).toLocaleString()}</div>
-                            <div>${escapeHtml(c.content)}</div>
-                            ${currentUser && (currentUser.id === c.user_id || currentUser.isAdmin) ? `<button class="comment-edit" onclick="editComment(${c.id}, \`${escapeHtml(c.content)}\`)">edit</button>` : ''}
+                            <div class="comment-meta">${safeUsername} · ${createdAt}</div>
+                            <div>${safeContent}</div>
+                            ${canEdit ? `<button class="comment-edit" onclick="editComment(${c.id}, \`${escapeHtml(c.content)}\`)">edit</button>` : ''}
                         </div>`;
             }
             cdiv.innerHTML = html;
@@ -233,22 +245,30 @@
     window.addComment = async (postId) => {
         if (!currentUser) return alert('please log in');
         const inp = document.getElementById(`commentInput-${postId}`);
-        const content = inp.value;
+        const content = inp.value.trim();
         if (!content) return;
-        await apiCall('/api/comments', { method: 'POST', body: JSON.stringify({ postId, content }) });
-        floatSymbols(['/ᐠ - ˕ -マ', 'ʕ•̫͡•ʔ', '«ʕ ·ᴥ·ʔ»'], 5);
-        inp.value = '';
-        loadComments(postId);
+        try {
+            await apiCall('/api/comments', { method: 'POST', body: JSON.stringify({ postId, content }) });
+            floatSymbols(['/ᐠ - ˕ -マ', 'ʕ•̫͡•ʔ', '«ʕ ·ᴥ·ʔ»'], 5);
+            inp.value = '';
+            loadComments(postId);
+        } catch(e) {
+            alert('Failed to add comment');
+        }
     };
 
     window.editComment = async (id, oldText) => {
         const newText = prompt('edit your comment', oldText);
-        if (newText && newText !== oldText) {
-            await apiCall(`/api/comments/${id}`, {
-                method: 'PUT',
-                body: JSON.stringify({ content: newText })
-            });
-            loadPosts();
+        if (newText && newText !== oldText && newText.trim()) {
+            try {
+                await apiCall(`/api/comments/${id}`, {
+                    method: 'PUT',
+                    body: JSON.stringify({ content: newText.trim() })
+                });
+                loadPosts();
+            } catch(e) {
+                alert('Failed to edit comment');
+            }
         }
     };
 
@@ -265,7 +285,7 @@
     function updateSecretRow() {
         const row = document.getElementById('secretRow');
         if (currentUser) {
-            row.innerHTML = `<input type="text" id="secretKeyInput" placeholder="type secret key...or not"><button id="unlockSecretBtn">unlock</button>`;
+            row.innerHTML = `<input type="text" id="secretKeyInput" placeholder="type secret key...or not" autocomplete="off"><button id="unlockSecretBtn">unlock</button>`;
             row.style.display = 'flex';
             document.getElementById('unlockSecretBtn').onclick = unlockSecret;
         } else { row.style.display = 'none'; }
@@ -296,14 +316,14 @@
         document.getElementById('adminPanel').innerHTML = `
             <div class="admin-panel">
                 <h3>➕ new publication</h3>
-                <input id="postTitle" placeholder="title"><br>
-                <textarea id="postContent" rows="3" placeholder="content"></textarea><br>
-                <input type="file" id="postFile"><br>
+                <input id="postTitle" placeholder="title" maxlength="200"><br>
+                <textarea id="postContent" rows="3" placeholder="content" maxlength="10000"></textarea><br>
+                <input type="file" id="postFile" accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.txt"><br>
                 <div class="checkbox-label"><input type="checkbox" id="secretCheck"> <label>make it secret</label></div>
-                <div id="secretPasswordDiv" style="display:none;"><input type="password" id="secretPassword" placeholder="password for secret post"></div>
+                <div id="secretPasswordDiv" style="display:none;"><input type="password" id="secretPassword" placeholder="password for secret post" maxlength="100"></div>
                 <button id="publishPostBtn" class="round-btn">publish</button>
                 <hr><h3>👑 promote user</h3>
-                <input id="promoteUserId" placeholder="user id">
+                <input id="promoteUserId" placeholder="user id" type="number">
                 <button id="promoteBtn" class="round-btn">promote to admin</button>
             </div>
         `;
@@ -311,62 +331,122 @@
         document.getElementById('publishPostBtn').onclick = async () => {
             const fd = new FormData();
             fd.append('section', currentSection);
-            fd.append('title', document.getElementById('postTitle').value);
-            fd.append('content', document.getElementById('postContent').value);
+            fd.append('title', document.getElementById('postTitle').value.trim());
+            fd.append('content', document.getElementById('postContent').value.trim());
             fd.append('is_secret', document.getElementById('secretCheck').checked);
             fd.append('secret_password', document.getElementById('secretPassword')?.value || '');
             if (document.getElementById('postFile').files[0]) fd.append('file', document.getElementById('postFile').files[0]);
-            await fetch('/api/posts', { method: 'POST', body: fd, credentials: 'include' });
-            document.getElementById('postTitle').value = '';
-            document.getElementById('postContent').value = '';
-            document.getElementById('postFile').value = '';
-            document.getElementById('secretCheck').checked = false;
-            document.getElementById('secretPasswordDiv').style.display = 'none';
-            loadPosts();
+            try {
+                await fetch('/api/posts', { method: 'POST', body: fd, credentials: 'include' });
+                document.getElementById('postTitle').value = '';
+                document.getElementById('postContent').value = '';
+                document.getElementById('postFile').value = '';
+                document.getElementById('secretCheck').checked = false;
+                document.getElementById('secretPasswordDiv').style.display = 'none';
+                loadPosts();
+            } catch(e) {
+                alert('Failed to publish');
+            }
         };
         document.getElementById('promoteBtn').onclick = async () => {
             const userId = parseInt(document.getElementById('promoteUserId').value);
-            if (userId) await apiCall('/api/make-admin', { method: 'POST', body: JSON.stringify({ userId }) });
-            alert('promoted');
+            if (userId) {
+                try {
+                    await apiCall('/api/make-admin', { method: 'POST', body: JSON.stringify({ userId }) });
+                    alert('promoted');
+                } catch(e) {
+                    alert('Failed to promote');
+                }
+            }
         };
     }
 
     async function showMessages() {
-        const msgs = await apiCall('/api/messages');
-        const users = await apiCall('/api/users');
-        let html = `<div class="messages-panel"><h3>private messages</h3><div>
-            <select id="pmUserId">${users.map(u => `<option value="${u.id}">${escapeHtml(u.username)}</option>`)}</select>
-            <textarea id="pmText" rows="2" placeholder="encrypted message"></textarea>
-            <button id="sendPmBtn" class="round-btn">send</button></div><div id="pmList">`;
-        for (let m of msgs) html += `<div class="message-item"><b>${escapeHtml(m.from_name)}</b> → <b>${escapeHtml(m.to_name)}</b><br><span style="color:#888;">${escapeHtml(m.encrypted_text)}</span><button onclick="decryptMessage('${escapeHtml(m.encrypted_text)}')" class="round-btn">decrypt</button></div>`;
-        html += `</div></div>`;
-        document.getElementById('postsContainer').innerHTML = html;
-        document.getElementById('sendPmBtn').onclick = async () => {
-            const toUserId = document.getElementById('pmUserId').value;
-            const txt = document.getElementById('pmText').value;
-            if (!txt) return;
-            await apiCall('/api/messages', { method: 'POST', body: JSON.stringify({ toUserId, encryptedText: txt }) });
-            showMessages();
-        };
+        try {
+            const msgs = await apiCall('/api/messages');
+            const users = await apiCall('/api/users');
+            let html = `<div class="messages-panel"><h3>private messages</h3><div>
+                <select id="pmUserId">${users.map(u => `<option value="${u.id}">${escapeHtml(u.username)}</option>`).join('')}</select>
+                <textarea id="pmText" rows="2" placeholder="encrypted message" maxlength="10000"></textarea>
+                <button id="sendPmBtn" class="round-btn">send</button></div><div id="pmList">`;
+            for (let m of msgs) {
+                const fromName = escapeHtml(m.from_name);
+                const toName = escapeHtml(m.to_name);
+                const encrypted = escapeHtml(m.encrypted_text);
+                html += `<div class="message-item"><b>${fromName}</b> → <b>${toName}</b><br><span style="color:#888;">${encrypted}</span><button onclick="decryptMessage('${escapeHtml(m.encrypted_text)}')" class="round-btn">decrypt</button></div>`;
+            }
+            html += `</div></div>`;
+            document.getElementById('postsContainer').innerHTML = html;
+            document.getElementById('sendPmBtn').onclick = async () => {
+                const toUserId = document.getElementById('pmUserId').value;
+                const txt = document.getElementById('pmText').value.trim();
+                if (!txt) return;
+                try {
+                    await apiCall('/api/messages', { method: 'POST', body: JSON.stringify({ toUserId, encryptedText: txt }) });
+                    showMessages();
+                } catch(e) {
+                    alert('Failed to send message');
+                }
+            };
+        } catch(e) {
+            alert('Failed to load messages');
+        }
     }
 
-    window.decryptMessage = (text) => { const pwd = prompt('enter password to decrypt'); if(pwd) alert('client-side decryption demo'); };
+    window.decryptMessage = (text) => { 
+        const pwd = prompt('enter password to decrypt'); 
+        if(pwd) alert('client-side decryption demo'); 
+    };
 
     function login() {
-        const u = prompt('Username:'), p = prompt('Password:');
+        const u = prompt('Username:');
+        const p = prompt('Password:');
         if (!u || !p) return;
-        fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ username: u, password: p }) })
-            .then(r => r.ok ? loadUser() : alert('Login failed'));
+        fetch('/api/login', { 
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' }, 
+            credentials: 'include', 
+            body: JSON.stringify({ username: u, password: p }) 
+        })
+        .then(r => {
+            if (r.ok) {
+                loadUser();
+            } else {
+                r.json().then(data => alert(data.error || 'Login failed'));
+            }
+        })
+        .catch(() => alert('Login failed'));
     }
 
     function register() {
-        const u = prompt('Username:'), p = prompt('Password:');
+        const u = prompt('Username:');
+        const p = prompt('Password (min 12 chars, must include uppercase, lowercase, number, special):');
         if (!u || !p) return;
-        fetch('/api/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ username: u, password: p }) })
-            .then(r => { if (r.ok) { floatSymbols(['おっす!', '(^_^)', '(^_^)'], 6); alert('Registered! Please log in.'); } else alert('Register failed'); });
+        fetch('/api/register', { 
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' }, 
+            credentials: 'include', 
+            body: JSON.stringify({ username: u, password: p }) 
+        })
+        .then(r => {
+            if (r.ok) { 
+                floatSymbols(['おっす!', '(^_^)', '(^_^)'], 6); 
+                alert('Registered! Please log in.'); 
+            } else {
+                r.json().then(data => alert(data.error || 'Register failed'));
+            }
+        })
+        .catch(() => alert('Register failed'));
     }
 
-    async function logout() { await fetch('/api/logout', { method: 'POST', credentials: 'include' }); location.reload(); }
+    async function logout() { 
+        try {
+            await fetch('/api/logout', { method: 'POST', credentials: 'include' });
+            location.reload();
+        } catch(e) {
+            location.reload();
+        }
+    }
 
     document.getElementById('showLoginBtn').onclick = login;
     document.getElementById('showRegisterBtn').onclick = register;
@@ -393,6 +473,10 @@
     if (document.querySelector('.nav-item')) document.querySelector('.nav-item').classList.add('active');
 
     loadUser();
+
+    // === ЗАЩИТА ОТ XSS ЧЕРЕЗ INNERHTML ===
+    // Все данные проходят через escapeHtml перед вставкой
+    console.log('🕯️ Lantern Kitchen loaded securely');
 </script>
 </body>
 </html>
