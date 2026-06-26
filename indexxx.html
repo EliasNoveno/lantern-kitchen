@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Lantern Kitchen</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #000; color: #736d70; font-family: 'Segoe UI', 'Quicksand', system-ui, sans-serif; padding: 2rem; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .site-header { text-align: center; margin-bottom: 2rem; border-bottom: 1px solid #945675; padding-bottom: 1rem; }
+        h1 { color: #945675; font-size: 2.5rem; font-weight: 400; }
+        .slogan { font-style: italic; color: #736d70; }
+        .top-bar { display: flex; justify-content: flex-end; gap: 1rem; margin-bottom: 2rem; }
+        .round-btn { background: transparent; border: 1px solid #945675; color: #945675; padding: 0.5rem 1.2rem; border-radius: 40px; cursor: pointer; transition: 0.2s; }
+        .round-btn:hover { background: #945675; color: #000; }
+        .user-panel { display: flex; justify-content: flex-end; align-items: center; gap: 1rem; margin-bottom: 2rem; }
+        .username { color: #945675; }
+        .nav { display: flex; justify-content: center; gap: 1.5rem; margin: 2rem 0; overflow-x: auto; white-space: nowrap; }
+        .nav-item { background: none; border: none; color: #736d70; padding: 0.3rem 0; cursor: pointer; font-size: 1rem; white-space: nowrap; }
+        .nav-item:hover { color: #945675; }
+        .nav-item.active { color: #945675; border-bottom: 2px solid #945675; }
+        .section-description { background: #0a0a0a; padding: 1rem; margin-bottom: 2rem; border-left: 3px solid #945675; text-align: center; }
+        .secret-row { display: flex; justify-content: center; gap: 1rem; margin-bottom: 2rem; }
+        .secret-row input { background: #111; border: 1px solid #736d70; color: #fff; padding: 0.5rem 1rem; border-radius: 40px; width: 250px; outline: none; }
+        .secret-row button { background: #945675; border: none; color: #000; padding: 0.5rem 1.2rem; border-radius: 40px; cursor: pointer; }
+        .admin-panel { background: #0a0a0a; border: 1px solid #945675; border-radius: 28px; padding: 1.5rem; margin-bottom: 2rem; }
+        .admin-panel input, .admin-panel textarea { background: #111; border: 1px solid #736d70; color: white; padding: 0.5rem; border-radius: 24px; width: 100%; margin-bottom: 1rem; }
+        .checkbox-label { display: flex; align-items: center; gap: 0.5rem; margin: 1rem 0; }
+        .posts-grid { display: flex; flex-direction: column; gap: 1.5rem; margin-bottom: 2rem; }
+        .post-card { background: #0a0a0a; border: 1px solid #2a2a2a; border-radius: 24px; padding: 1.2rem; }
+        .post-card.secret { border-color: #945675; background: #0f0b0d; }
+        .post-title { color: #945675; font-size: 1.4rem; margin-bottom: 0.5rem; }
+        .post-meta { font-size: 0.75rem; color: #5a5558; margin-bottom: 0.8rem; }
+        .post-content { margin: 1rem 0; white-space: pre-wrap; }
+        .post-file a { color: #945675; text-decoration: none; }
+        .comments-section { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #2a2a2a; }
+        .comment { background: #000; padding: 0.5rem; margin: 0.5rem 0; border-radius: 16px; }
+        .comment-meta { font-size: 0.7rem; color: #5a5558; }
+        .comment-edit { font-size: 0.7rem; background: none; border: none; color: #736d70; cursor: pointer; margin-left: 0.5rem; }
+        .comment-input { margin-top: 0.5rem; display: flex; gap: 0.5rem; }
+        .comment-input input { flex: 1; background: #111; border: 1px solid #736d70; padding: 0.4rem; border-radius: 40px; color: white; }
+        .comment-input button { background: #945675; border: none; color: #000; padding: 0.4rem 1rem; border-radius: 40px; cursor: pointer; }
+        .pagination { display: flex; justify-content: center; gap: 0.8rem; margin: 2rem 0; }
+        .pagination button { background: transparent; border: 1px solid #736d70; color: #736d70; width: 40px; height: 40px; border-radius: 50%; cursor: pointer; }
+        .pagination button.active-page { background: #945675; border-color: #945675; color: #000; }
+        .messages-panel { background: #0a0a0a; border-radius: 28px; padding: 1.5rem; margin-top: 2rem; }
+        .message-item { border-bottom: 1px solid #2a2a2a; padding: 0.8rem 0; }
+        .floating-container { position: fixed; bottom: 20px; right: 20px; pointer-events: none; z-index: 1000; }
+        .float-emoji { position: absolute; font-size: 1.6rem; animation: floatUp 2s ease-out forwards; opacity: 0; }
+        @keyframes floatUp { 0% { opacity: 1; transform: translateY(0); } 100% { opacity: 0; transform: translateY(-100px); } }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="site-header">
+        <h1>Lantern Kitchen</h1>
+        <div class="slogan">Eat. Or be eaten.</div>
+    </div>
+
+    <div id="topBar" class="top-bar">
+        <button id="showLoginBtn" class="round-btn">log in...</button>
+        <button id="showRegisterBtn" class="round-btn">or regester maybe?</button>
+    </div>
+    <div id="userPanel" class="user-panel" style="display:none;">
+        <span class="username" id="loggedUserName"></span>
+        <button id="logoutBtn" class="round-btn">log out</button>
+        <button id="showMessagesBtn" class="round-btn">private messages</button>
+    </div>
+
+    <div class="nav" id="navBar"></div>
+    <div id="sectionDescription" class="section-description"></div>
+    <div id="secretRow" class="secret-row" style="display:none;"></div>
+    <div id="adminPanel"></div>
+    <div id="postsContainer" class="posts-grid"></div>
+    <div id="paginationContainer" class="pagination"></div>
+</div>
+<div class="floating-container" id="floatingContainer"></div>
+
+<script>
+    let currentUser = null;
+    let currentSection = 'new';
+    let currentPage = 1;
+    let totalPages = 1;
+    let secretActive = false;
+    let isLoading = false;
+
+    const sections = ['new', 'break it fast', 'lunch?', 'dinner...', 'desserts!', 'snacks :>', 'cigs hell yeah', 'alco-meow', 'lab'];
+    const sectionDesc = {
+        'break it fast': '速やかにこれを壊せ、朝にこれを壊せ ʚ(•ө•)ɞ',
+        'lunch?': 'お昼？ まあね…^_^',
+        'dinner...': '長い一日の後の夕食…',
+        'desserts!': 'やったー！おいしー！(≧▽≦)',
+        'snacks :>': 'パソコン前に長時間、でも長作業は面倒。',
+        'cigs hell yeah': 'お茶の喫煙、そしてそれだけではない :>',
+        'alco-meow': 'にゃ (=^･ω･^=)ノ',
+        'lab': '真の化学者のラボ :D',
+        'new': 'latest offerings...'
+    };
+
+    function floatSymbols(symbols, count = 5) {
+        const c = document.getElementById('floatingContainer');
+        for (let i = 0; i < count; i++) {
+            let d = document.createElement('div');
+            d.className = 'float-emoji';
+            d.textContent = symbols[Math.floor(Math.random() * symbols.length)];
+            d.style.left = Math.random() * 80 + 10 + '%';
+            c.appendChild(d);
+            setTimeout(() => d.remove(), 2000);
+        }
+    }
+
+    async function apiCall(url, opts = {}) {
+        const res = await fetch(url, { ...opts, credentials: 'include', headers: { 'Content-Type': 'application/json', ...opts.headers } });
+        if (res.status === 401) {
+            currentUser = null;
+            document.getElementById('topBar').style.display = 'flex';
+            document.getElementById('userPanel').style.display = 'none';
+            throw new Error('Unauthorized');
+        }
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || 'API error');
+        return json;
+    }
+
+    async function loadUser() {
+        if (isLoading) return;
+        isLoading = true;
+        try {
+            const user = await apiCall('/api/me');
+            if (user && user.id) {
+                currentUser = user;
+                document.getElementById('topBar').style.display = 'none';
+                document.getElementById('userPanel').style.display = 'flex';
+                document.getElementById('loggedUserName').innerText = currentUser.username;
+                if (currentUser.isAdmin) renderAdminPanel();
+                await loadPosts();
+            } else {
+                currentUser = null;
+                document.getElementById('topBar').style.display = 'flex';
+                document.getElementById('userPanel').style.display = 'none';
+                await loadPosts();
+            }
+        } catch(e) {
+            currentUser = null;
+            document.getElementById('topBar').style.display = 'flex';
+            document.getElementById('userPanel').style.display = 'none';
+            await loadPosts();
+        } finally {
+            isLoading = false;
+        }
+    }
+
+    async function loadPosts() {
+        try {
+            const data = await apiCall(`/api/posts/${encodeURIComponent(currentSection)}?page=${currentPage}`);
+            totalPages = data.totalPages;
+            renderPosts(data.posts);
+            renderPagination();
+            document.getElementById('sectionDescription').innerHTML = sectionDesc[currentSection] || '';
+            updateSecretRow();
+        } catch(e) {
+            document.getElementById('postsContainer').innerHTML = '<div style="text-align:center; padding:2rem;">error loading posts</div>';
+        }
+    }
+
+    function renderPosts(posts) {
+        const container = document.getElementById('postsContainer');
+        if (!posts.length) {
+            container.innerHTML = '<div style="text-align:center; padding:2rem;">no posts yet</div>';
+            return;
+        }
+        let html = '';
+        for (let p of posts) {
+            html += `<div class="post-card ${p.is_secret ? 'secret' : ''}">
+                        <div class="post-title">${escapeHtml(p.title || 'untitled')}</div>
+                        <div class="post-meta">by ${escapeHtml(p.username)} · ${new Date(p.created_at).toLocaleString()}</div>
+                        <div class="post-content">${escapeHtml(p.content || '')}</div>
+                        ${p.file_path ? `<div class="post-file"><a href="${p.file_path}" target="_blank">📎 attachment</a></div>` : ''}
+                        <div class="comments-section" id="comments-${p.id}">
+                            <div class="comment-input">
+                                <input id="commentInput-${p.id}" placeholder="write a comment...">
+                                <button onclick="addComment(${p.id})">send</button>
+                            </div>
+                            <div id="commentList-${p.id}"></div>
+                        </div>
+                    </div>`;
+        }
+        container.innerHTML = html;
+        for (let p of posts) loadComments(p.id);
+    }
+
+    async function loadComments(postId) {
+        try {
+            const comments = await apiCall(`/api/comments/${postId}`);
+            const cdiv = document.getElementById(`commentList-${postId}`);
+            if (!cdiv) return;
+            if (!comments.length) {
+                cdiv.innerHTML = '<div class="comment">no comments yet</div>';
+                return;
+            }
+            let html = '';
+            for (let c of comments) {
+                html += `<div class="comment">
+                            <div class="comment-meta">${escapeHtml(c.username)} · ${new Date(c.created_at).toLocaleString()}</div>
+                            <div>${escapeHtml(c.content)}</div>
+                            ${currentUser && (currentUser.id === c.user_id || currentUser.isAdmin) ? `<button class="comment-edit" onclick="editComment(${c.id}, \`${escapeHtml(c.content)}\`)">edit</button>` : ''}
+                        </div>`;
+            }
+            cdiv.innerHTML = html;
+        } catch(e) {
+            console.error('Error loading comments:', e);
+        }
+    }
+
+    window.addComment = async (postId) => {
+        if (!currentUser) return alert('please log in');
+        const inp = document.getElementById(`commentInput-${postId}`);
+        const content = inp.value;
+        if (!content) return;
+        await apiCall('/api/comments', { method: 'POST', body: JSON.stringify({ postId, content }) });
+        floatSymbols(['/ᐠ - ˕ -マ', 'ʕ•̫͡•ʔ', '«ʕ ·ᴥ·ʔ»'], 5);
+        inp.value = '';
+        loadComments(postId);
+    };
+
+    window.editComment = async (id, oldText) => {
+        const newText = prompt('edit your comment', oldText);
+        if (newText && newText !== oldText) {
+            await fetch(`/api/comments/${id}`, {
+                method: 'PUT', credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content: newText })
+            });
+            loadPosts();
+        }
+    };
+
+    function renderPagination() {
+        const cont = document.getElementById('paginationContainer');
+        if (totalPages <= 1) { cont.innerHTML = ''; return; }
+        let html = '';
+        for (let i = 1; i <= totalPages; i++) html += `<button class="${i === currentPage ? 'active-page' : ''}" onclick="goToPage(${i})">${i}</button>`;
+        cont.innerHTML = html;
+    }
+
+    window.goToPage = (page) => { currentPage = page; loadPosts(); };
+
+    function updateSecretRow() {
+        const row = document.getElementById('secretRow');
+        if (currentUser?.isAdmin || secretActive) {
+            row.innerHTML = `<input type="text" id="secretKeyInput" placeholder="type secret key...or not"><button id="unlockSecretBtn">unlock</button>`;
+            row.style.display = 'flex';
+            document.getElementById('unlockSecretBtn').onclick = unlockSecret;
+        } else { row.style.display = 'none'; }
+    }
+
+    async function unlockSecret() {
+        const pwd = document.getElementById('secretKeyInput').value;
+        if (!pwd) return;
+        secretActive = true;
+        try {
+            const res = await fetch('/api/posts/secret', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ section: currentSection, password: pwd })
+            });
+            if (res.ok) {
+                const secretPosts = await res.json();
+                floatSymbols(['˚ ✦', '⋆｡°✩', '✧', 'ʕ• ᴥ •ʔ'], 8);
+                renderPosts(secretPosts);
+            } else { alert('wrong key or no secrets'); }
+        } catch(e) { alert('error'); }
+    }
+
+    function renderAdminPanel() {
+        if (!currentUser?.isAdmin) return;
+        document.getElementById('adminPanel').innerHTML = `
+            <div class="admin-panel">
+                <h3>➕ new publication</h3>
+                <input id="postTitle" placeholder="title"><br>
+                <textarea id="postContent" rows="3" placeholder="content"></textarea><br>
+                <input type="file" id="postFile"><br>
+                <div class="checkbox-label"><input type="checkbox" id="secretCheck"> <label>make it secret</label></div>
+                <div id="secretPasswordDiv" style="display:none;"><input type="password" id="secretPassword" placeholder="password for secret post"></div>
+                <button id="publishPostBtn" class="round-btn">publish</button>
+                <hr><h3>👑 promote user</h3>
+                <input id="promoteUserId" placeholder="user id">
+                <button id="promoteBtn" class="round-btn">promote to admin</button>
+            </div>
+        `;
+        document.getElementById('secretCheck').onchange = e => document.getElementById('secretPasswordDiv').style.display = e.target.checked ? 'block' : 'none';
+        document.getElementById('publishPostBtn').onclick = async () => {
+            const fd = new FormData();
+            fd.append('section', currentSection);
+            fd.append('title', document.getElementById('postTitle').value);
+            fd.append('content', document.getElementById('postContent').value);
+            fd.append('is_secret', document.getElementById('secretCheck').checked);
+            fd.append('secret_password', document.getElementById('secretPassword')?.value || '');
+            if (document.getElementById('postFile').files[0]) fd.append('file', document.getElementById('postFile').files[0]);
+            await fetch('/api/posts', { method: 'POST', body: fd, credentials: 'include' });
+            document.getElementById('postTitle').value = '';
+            document.getElementById('postContent').value = '';
+            document.getElementById('postFile').value = '';
+            document.getElementById('secretCheck').checked = false;
+            document.getElementById('secretPasswordDiv').style.display = 'none';
+            loadPosts();
+        };
+        document.getElementById('promoteBtn').onclick = async () => {
+            const userId = parseInt(document.getElementById('promoteUserId').value);
+            if (userId) await apiCall('/api/make-admin', { method: 'POST', body: JSON.stringify({ userId }) });
+            alert('promoted');
+        };
+    }
+
+    async function showMessages() {
+        const msgs = await apiCall('/api/messages');
+        const users = await apiCall('/api/users');
+        let html = `<div class="messages-panel"><h3>private messages</h3><div>
+            <select id="pmUserId">${users.map(u => `<option value="${u.id}">${u.username}</option>`)}</select>
+            <textarea id="pmText" rows="2" placeholder="encrypted message"></textarea>
+            <button id="sendPmBtn" class="round-btn">send</button></div><div id="pmList">`;
+        for (let m of msgs) html += `<div class="message-item"><b>${escapeHtml(m.from_name)}</b> → <b>${escapeHtml(m.to_name)}</b><br><span style="color:#888;">${escapeHtml(m.encrypted_text)}</span><button onclick="decryptMessage('${escapeHtml(m.encrypted_text)}')" class="round-btn">decrypt</button></div>`;
+        html += `</div></div>`;
+        document.getElementById('postsContainer').innerHTML = html;
+        document.getElementById('sendPmBtn').onclick = async () => {
+            const toUserId = document.getElementById('pmUserId').value;
+            const txt = document.getElementById('pmText').value;
+            if (!txt) return;
+            await apiCall('/api/messages', { method: 'POST', body: JSON.stringify({ toUserId, encryptedText: txt }) });
+            showMessages();
+        };
+    }
+
+    window.decryptMessage = (text) => { const pwd = prompt('enter password to decrypt'); if(pwd) alert('client-side decryption demo'); };
+
+    function login() {
+        const u = prompt('Username:'), p = prompt('Password:');
+        if (!u || !p) return;
+        fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ username: u, password: p }) })
+            .then(r => r.ok ? loadUser() : alert('Login failed'));
+    }
+
+    function register() {
+        const u = prompt('Username:'), p = prompt('Password:');
+        if (!u || !p) return;
+        fetch('/api/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ username: u, password: p }) })
+            .then(r => { if (r.ok) { floatSymbols(['おっす!', '(^_^)', '(^_^)'], 6); alert('Registered! Please log in.'); } else alert('Register failed'); });
+    }
+
+    async function logout() { await fetch('/api/logout', { method: 'POST', credentials: 'include' }); location.reload(); }
+
+    function escapeHtml(str) { if (!str) return ''; return str.replace(/[&<>]/g, m => m === '&' ? '&amp;' : m === '<' ? '&lt;' : '&gt;'); }
+
+    document.getElementById('showLoginBtn').onclick = login;
+    document.getElementById('showRegisterBtn').onclick = register;
+    document.getElementById('logoutBtn').onclick = logout;
+    document.getElementById('showMessagesBtn').onclick = () => { document.getElementById('postsContainer').innerHTML = ''; showMessages(); };
+
+    const nav = document.getElementById('navBar');
+    sections.forEach(s => {
+        const btn = document.createElement('button');
+        btn.className = 'nav-item';
+        btn.textContent = s;
+        btn.onclick = () => {
+            document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            currentSection = s;
+            currentPage = 1;
+            secretActive = false;
+            if (currentUser?.isAdmin) renderAdminPanel();
+            loadPosts();
+            updateSecretRow();
+        };
+        nav.appendChild(btn);
+    });
+    if (document.querySelector('.nav-item')) document.querySelector('.nav-item').classList.add('active');
+
+    loadUser();
+</script>
+</body>
+</html>
