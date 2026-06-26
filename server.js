@@ -1,4 +1,4 @@
-// lantern_server.js - ULTRA-SECURE FOR DARKNET
+// lantern_server.js - ULTRA-SECURE FOR DARKNET (Tor .onion)
 const express = require('express');
 const sqlite3 = require('sqlite3').verbose();
 const bcrypt = require('bcrypt');
@@ -75,6 +75,7 @@ app.use(helmet({
     hsts: {
         maxAge: 0, // .onion не поддерживает HSTS
         includeSubDomains: false,
+        preload: false,
     },
     referrerPolicy: { policy: 'no-referrer' },
     noSniff: true,
@@ -150,7 +151,6 @@ const storage = multer.diskStorage({
         cb(null, uploadDir);
     },
     filename: (req, file, cb) => {
-        // Безопасное имя файла
         const ext = path.extname(file.originalname);
         const allowedExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.pdf', '.txt'];
         if (!allowedExts.includes(ext.toLowerCase())) {
@@ -249,14 +249,13 @@ db.serialize(() => {
         FOREIGN KEY(to_user) REFERENCES users(id)
     )`);
     
-    // Sessions with fingerprint
+    // Sessions with fingerprint (без IP для Tor)
     db.run(`CREATE TABLE IF NOT EXISTS sessions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER,
         token TEXT UNIQUE NOT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         expires_at DATETIME,
-        ip_hash TEXT,
         user_agent TEXT,
         session_id TEXT UNIQUE,
         fingerprint TEXT,
@@ -274,6 +273,12 @@ db.serialize(() => {
         FOREIGN KEY(user_id) REFERENCES users(id)
     )`);
     
+    // Used nonces for replay protection
+    db.run(`CREATE TABLE IF NOT EXISTS used_nonces (
+        nonce TEXT PRIMARY KEY,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+    
     // Indexes for performance
     db.run(`CREATE INDEX IF NOT EXISTS idx_posts_section ON posts(section)`);
     db.run(`CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at DESC)`);
@@ -281,9 +286,10 @@ db.serialize(() => {
     db.run(`CREATE INDEX IF NOT EXISTS idx_messages_users ON messages(from_user, to_user)`);
     db.run(`CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token)`);
     db.run(`CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_log(user_id)`);
+    db.run(`CREATE INDEX IF NOT EXISTS idx_used_nonces ON used_nonces(nonce)`);
 });
 
-// === АУТЕНТИФИКАЦИЯ С ЗАЩИТОЙ ОТ ПЕРЕХВАТА ===
+// === АУТЕНТИФИКАЦИЯ С ЗАЩИТОЙ ОТ ПЕРЕХВАТА (БЕЗ ПРИВЯЗКИ К IP ДЛЯ TOR) ===
 function authenticate(req, res, next) {
     const token = req.cookies.token;
     if (!token) {
@@ -302,20 +308,18 @@ function authenticate(req, res, next) {
                     return res.status(401).json({ error: 'Session expired' });
                 }
                 
-                // Проверяем IP и User-Agent
-                const ipHash = createHash('sha256').update(req.ip || '').digest('hex');
+                // Для Tor используем только User-Agent + Accept-Language (без IP)
                 const uaHash = createHash('sha256').update(req.get('User-Agent') || '').digest('hex');
+                const langHash = createHash('sha256').update(req.get('Accept-Language') || '').digest('hex');
                 const fingerprint = createHash('sha256').update(
-                    ipHash + uaHash + (req.get('Accept-Language') || '')
+                    uaHash + langHash
                 ).digest('hex');
                 
                 if (session.fingerprint !== fingerprint) {
-                    // Возможный перехват сессии
                     db.run('DELETE FROM sessions WHERE id = ?', [session.id]);
                     res.clearCookie('token');
-                    // Логируем инцидент
-                    db.run('INSERT INTO audit_log (user_id, action, ip_hash, details) VALUES (?, ?, ?, ?)',
-                        [decoded.id, 'SESSION_HIJACK_ATTEMPT', ipHash, 'Fingerprint mismatch']);
+                    db.run('INSERT INTO audit_log (user_id, action, details) VALUES (?, ?, ?)',
+                        [decoded.id, 'SESSION_HIJACK_ATTEMPT', 'Fingerprint mismatch']);
                     return res.status(401).json({ error: 'Session hijacking detected' });
                 }
                 
@@ -357,12 +361,11 @@ function isAdmin(req, res, next) {
     next();
 }
 
-// === CSRF ЗАЩИТА ДЛЯ .ONION ===
+// === CSRF ЗАЩИТА ДЛЯ .ONION (упрощённая) ===
 function csrfProtect(req, res, next) {
     const methods = ['POST', 'PUT', 'DELETE', 'PATCH'];
     if (!methods.includes(req.method)) return next();
     
-    const origin = req.get('Origin');
     const referer = req.get('Referer');
     const host = req.get('Host');
     
@@ -383,6 +386,7 @@ function csrfProtect(req, res, next) {
     }
     
     // Для обычных сайтов проверяем origin
+    const origin = req.get('Origin');
     if (origin) {
         try {
             const originUrl = new URL(origin);
@@ -438,6 +442,19 @@ function generateNonce() {
     return randomBytes(32).toString('hex') + Date.now().toString(36);
 }
 
+// === ПРОВЕРКА И СОХРАНЕНИЕ NONCE ===
+function checkAndStoreNonce(nonce, callback) {
+    db.get('SELECT nonce FROM used_nonces WHERE nonce = ?', [nonce], (err, row) => {
+        if (err) return callback(err);
+        if (row) return callback(new Error('Nonce already used'));
+        
+        db.run('INSERT INTO used_nonces (nonce) VALUES (?)', [nonce], (err) => {
+            if (err) return callback(err);
+            callback(null);
+        });
+    });
+}
+
 // ==========================================
 // === API ENDPOINTS =======================
 // ==========================================
@@ -474,9 +491,8 @@ app.post('/api/register', registerLimiter,
                         return res.status(500).json({ error: 'Registration failed' });
                     }
                     
-                    // Логируем регистрацию
                     db.run('INSERT INTO audit_log (user_id, action, ip_hash, details) VALUES (?, ?, ?, ?)',
-                        [this.lastID, 'REGISTER', ipHash, `Username: ${username}`]);
+                        [this.lastID, 'REGISTER', ipHash, 'New user registered']);
                     
                     res.status(201).json({ message: 'Registered' });
                 });
@@ -533,20 +549,21 @@ app.post('/api/login', authLimiter,
                 );
                 
                 const expiresAt = new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString();
+                // Для Tor используем только User-Agent + Accept-Language (без IP)
                 const uaHash = createHash('sha256').update(req.get('User-Agent') || '').digest('hex');
+                const langHash = createHash('sha256').update(req.get('Accept-Language') || '').digest('hex');
                 const fingerprint = createHash('sha256').update(
-                    ipHash + uaHash + (req.get('Accept-Language') || '')
+                    uaHash + langHash
                 ).digest('hex');
                 
-                db.run('INSERT INTO sessions (user_id, token, expires_at, ip_hash, user_agent, session_id, fingerprint) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                    [user.id, token, expiresAt, ipHash, uaHash, sessionId, fingerprint],
+                db.run('INSERT INTO sessions (user_id, token, expires_at, user_agent, session_id, fingerprint) VALUES (?, ?, ?, ?, ?, ?)',
+                    [user.id, token, expiresAt, uaHash, sessionId, fingerprint],
                     (err) => {
                         if (err) {
                             console.error(encryptLog(err.message));
                             return res.status(500).json({ error: 'Login failed' });
                         }
                         
-                        // Логируем успешный вход
                         db.run('INSERT INTO audit_log (user_id, action, ip_hash, details) VALUES (?, ?, ?, ?)',
                             [user.id, 'LOGIN_SUCCESS', ipHash, `Session: ${sessionId.substring(0, 8)}`]);
                         
@@ -689,21 +706,28 @@ app.post('/api/posts', authenticate, csrfProtect, postLimiter, upload.single('fi
         let secretSalt = null;
         const nonce = generateNonce();
         
-        if (isSecret && secret_password) {
-            secretSalt = generateSalt();
-            secretHash = bcrypt.hashSync(secret_password + secretSalt, 14);
-        }
+        // Проверка на replay attack
+        checkAndStoreNonce(nonce, (err) => {
+            if (err) {
+                return res.status(400).json({ error: 'Invalid request' });
+            }
+            
+            if (isSecret && secret_password) {
+                secretSalt = generateSalt();
+                secretHash = bcrypt.hashSync(secret_password + secretSalt, 14);
+            }
 
-        const sql = `INSERT INTO posts (section, title, content, file_path, is_secret, secret_hash, secret_salt, created_by, nonce)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-        db.run(sql, [section, sanitizeInput(title || ''), sanitizeInput(content || ''), filePath, isSecret, secretHash, secretSalt, req.user.id, nonce],
-            function(err) {
-                if (err) {
-                    console.error(encryptLog(err.message));
-                    return res.status(500).json({ error: 'Failed to create post' });
-                }
-                res.status(201).json({ id: this.lastID, message: 'Post created' });
-            });
+            const sql = `INSERT INTO posts (section, title, content, file_path, is_secret, secret_hash, secret_salt, created_by, nonce)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+            db.run(sql, [section, sanitizeInput(title || ''), sanitizeInput(content || ''), filePath, isSecret, secretHash, secretSalt, req.user.id, nonce],
+                function(err) {
+                    if (err) {
+                        console.error(encryptLog(err.message));
+                        return res.status(500).json({ error: 'Failed to create post' });
+                    }
+                    res.status(201).json({ id: this.lastID, message: 'Post created' });
+                });
+        });
     }
 );
 
@@ -904,6 +928,7 @@ app.use((err, req, res, next) => {
         }
         return res.status(400).json({ error: err.message });
     }
+    // Не показываем детали ошибок клиенту
     res.status(500).json({ error: 'Internal server error' });
 });
 
@@ -932,6 +957,3 @@ process.on('SIGINT', () => {
         process.exit(0);
     });
 });
-
-// === КРИПТОГРАФИЧЕСКИ БЕЗОПАСНЫЙ ГЕНЕРАТОР СЛУЧАЙНЫХ ЧИСЕЛ ===
-// Уже используется crypto.randomBytes везде
