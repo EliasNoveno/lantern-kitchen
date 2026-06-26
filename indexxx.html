@@ -109,6 +109,24 @@
         }
     }
 
+    // === Усиленный экранинг (безопасный) ===
+    function escapeHtml(str) {
+        if (!str) return '';
+        const map = {
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#039;',
+            '/': '&#x2F;',
+            '`': '&#x60;',
+            '=': '&#x3D;'
+        };
+        return String(str).replace(/[&<>"'`=\/]/g, function(s) {
+            return map[s];
+        });
+    }
+
     async function apiCall(url, opts = {}) {
         const res = await fetch(url, { ...opts, credentials: 'include', headers: { 'Content-Type': 'application/json', ...opts.headers } });
         if (res.status === 401) {
@@ -175,7 +193,7 @@
                         <div class="post-title">${escapeHtml(p.title || 'untitled')}</div>
                         <div class="post-meta">by ${escapeHtml(p.username)} · ${new Date(p.created_at).toLocaleString()}</div>
                         <div class="post-content">${escapeHtml(p.content || '')}</div>
-                        ${p.file_path ? `<div class="post-file"><a href="${p.file_path}" target="_blank">📎 attachment</a></div>` : ''}
+                        ${p.file_path ? `<div class="post-file"><a href="${escapeHtml(p.file_path)}" target="_blank">📎 attachment</a></div>` : ''}
                         <div class="comments-section" id="comments-${p.id}">
                             <div class="comment-input">
                                 <input id="commentInput-${p.id}" placeholder="write a comment...">
@@ -226,9 +244,8 @@
     window.editComment = async (id, oldText) => {
         const newText = prompt('edit your comment', oldText);
         if (newText && newText !== oldText) {
-            await fetch(`/api/comments/${id}`, {
-                method: 'PUT', credentials: 'include',
-                headers: { 'Content-Type': 'application/json' },
+            await apiCall(`/api/comments/${id}`, {
+                method: 'PUT',
                 body: JSON.stringify({ content: newText })
             });
             loadPosts();
@@ -247,7 +264,7 @@
 
     function updateSecretRow() {
         const row = document.getElementById('secretRow');
-        if (currentUser?.isAdmin || secretActive) {
+        if (currentUser) {
             row.innerHTML = `<input type="text" id="secretKeyInput" placeholder="type secret key...or not"><button id="unlockSecretBtn">unlock</button>`;
             row.style.display = 'flex';
             document.getElementById('unlockSecretBtn').onclick = unlockSecret;
@@ -257,17 +274,20 @@
     async function unlockSecret() {
         const pwd = document.getElementById('secretKeyInput').value;
         if (!pwd) return;
-        secretActive = true;
         try {
             const res = await fetch('/api/posts/secret', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
                 body: JSON.stringify({ section: currentSection, password: pwd })
             });
             if (res.ok) {
                 const secretPosts = await res.json();
                 floatSymbols(['˚ ✦', '⋆｡°✩', '✧', 'ʕ• ᴥ •ʔ'], 8);
                 renderPosts(secretPosts);
-            } else { alert('wrong key or no secrets'); }
+            } else {
+                alert('wrong key or no secrets');
+            }
         } catch(e) { alert('error'); }
     }
 
@@ -315,7 +335,7 @@
         const msgs = await apiCall('/api/messages');
         const users = await apiCall('/api/users');
         let html = `<div class="messages-panel"><h3>private messages</h3><div>
-            <select id="pmUserId">${users.map(u => `<option value="${u.id}">${u.username}</option>`)}</select>
+            <select id="pmUserId">${users.map(u => `<option value="${u.id}">${escapeHtml(u.username)}</option>`)}</select>
             <textarea id="pmText" rows="2" placeholder="encrypted message"></textarea>
             <button id="sendPmBtn" class="round-btn">send</button></div><div id="pmList">`;
         for (let m of msgs) html += `<div class="message-item"><b>${escapeHtml(m.from_name)}</b> → <b>${escapeHtml(m.to_name)}</b><br><span style="color:#888;">${escapeHtml(m.encrypted_text)}</span><button onclick="decryptMessage('${escapeHtml(m.encrypted_text)}')" class="round-btn">decrypt</button></div>`;
@@ -347,8 +367,6 @@
     }
 
     async function logout() { await fetch('/api/logout', { method: 'POST', credentials: 'include' }); location.reload(); }
-
-    function escapeHtml(str) { if (!str) return ''; return str.replace(/[&<>]/g, m => m === '&' ? '&amp;' : m === '<' ? '&lt;' : '&gt;'); }
 
     document.getElementById('showLoginBtn').onclick = login;
     document.getElementById('showRegisterBtn').onclick = register;
