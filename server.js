@@ -1,4 +1,4 @@
-// lantern_server.js - УСИЛЕННАЯ ВЕРСИЯ ДЛЯ ДАРКНЕТА
+// lantern_server.js - УЛЬТРА-ЗАЩИЩЕННАЯ ВЕРСИЯ ДЛЯ ДАРКНЕТА
 const express = require('express');
 const sqlite3 = require('sqlite3').verbose();
 const bcrypt = require('bcrypt');
@@ -16,7 +16,37 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// === УСИЛЕННАЯ БЕЗОПАСНОСТЬ ===
+// === ГЕНЕРАЦИЯ СЕКРЕТОВ ===
+const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(64).toString('hex');
+const COOKIE_SECRET = process.env.COOKIE_SECRET || crypto.randomBytes(32).toString('hex');
+const ENCRYPTION_KEY = crypto.createHash('sha256').update(process.env.ENCRYPTION_KEY || crypto.randomBytes(32)).digest();
+
+// === ЗАЩИТА ОТ АТАК ПО ВРЕМЕНИ ===
+function timingSafeCompare(a, b) {
+    if (a.length !== b.length) return false;
+    try {
+        return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+    } catch {
+        return false;
+    }
+}
+
+// === БЕЗОПАСНОЕ СРАВНЕНИЕ ХЕШЕЙ ===
+async function secureCompareHash(plaintext, hash, salt) {
+    const computed = await bcrypt.hash(plaintext + salt, 12);
+    return timingSafeCompare(computed, hash);
+}
+
+// === ШИФРОВАНИЕ ЛОГОВ ===
+function encryptLog(data) {
+    const iv = crypto.randomBytes(16);
+    const cipher = crypto.createCipheriv('aes-256-gcm', ENCRYPTION_KEY, iv);
+    const encrypted = Buffer.concat([cipher.update(data, 'utf8'), cipher.final()]);
+    const authTag = cipher.getAuthTag();
+    return Buffer.concat([iv, authTag, encrypted]).toString('base64');
+}
+
+// === УСИЛЕННАЯ БЕЗОПАСНОСТЬ HELMET ===
 app.use(helmet({
     contentSecurityPolicy: {
         directives: {
@@ -27,101 +57,83 @@ app.use(helmet({
             connectSrc: ["'self'"],
             frameSrc: ["'none'"],
             objectSrc: ["'none'"],
+            baseUri: ["'self'"],
+            formAction: ["'self'"],
         },
     },
     hsts: {
-        maxAge: 31536000,
-        includeSubDomains: true,
-        preload: true
+        maxAge: 0, // Отключаем HSTS для .onion
+        includeSubDomains: false,
     },
     referrerPolicy: { policy: 'no-referrer' },
     noSniff: true,
     xssFilter: true,
+    frameguard: { action: 'deny' },
 }));
 
-// === RATE LIMITING ДЛЯ ДАРКНЕТА ===
+// === RATE LIMITING С РАЗНЫМИ ЛИМИТАМИ ===
 const globalLimiter = rateLimit({
-    windowMs: 5 * 60 * 1000,
-    max: 60,
+    windowMs: 1 * 60 * 1000,
+    max: 30,
     message: { error: 'Too many requests. Slow down.' },
     standardHeaders: true,
     legacyHeaders: false,
+    keyGenerator: (req) => {
+        return req.ip || req.connection.remoteAddress;
+    }
 });
 app.use('/api/', globalLimiter);
 
-const strictLimiter = rateLimit({
+const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 5,
     skipSuccessfulRequests: true,
-    message: { error: 'Too many attempts. Try again later.' }
+    message: { error: 'Too many attempts. Try again later.' },
+    keyGenerator: (req) => req.ip || req.connection.remoteAddress
 });
 
 const registerLimiter = rateLimit({
     windowMs: 60 * 60 * 1000,
-    max: 3,
-    message: { error: 'Registration limit reached. Try again later.' }
+    max: 2,
+    message: { error: 'Registration limit reached. Try again later.' },
+    keyGenerator: (req) => req.ip || req.connection.remoteAddress
 });
 
-app.use(express.json({ limit: '10mb' }));
+const postLimiter = rateLimit({
+    windowMs: 5 * 60 * 1000,
+    max: 10,
+    message: { error: 'Too many posts. Slow down.' },
+    keyGenerator: (req) => req.ip || req.connection.remoteAddress
+});
+
+// === ПАРСЕРЫ С ОГРАНИЧЕНИЯМИ ===
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+
+// Статика с защитой
 app.use(express.static('public', {
-    maxAge: '1d',
+    maxAge: '1h',
     etag: true,
     lastModified: true,
+    setHeaders: (res, path) => {
+        res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+    }
 }));
-app.use(cookieParser());
 
-const JWT_SECRET = process.env.JWT_SECRET;
-if (!JWT_SECRET || JWT_SECRET.length < 32) {
-    console.error('FATAL: JWT_SECRET must be at least 32 characters in .env');
-    process.exit(1);
-}
-
-// === БЕЗОПАСНАЯ РАБОТА С ФАЙЛАМИ ===
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        const dir = 'public/uploads';
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-        cb(null, dir);
-    },
-    filename: (req, file, cb) => {
-        const hash = crypto.randomBytes(16).toString('hex');
-        const ext = path.extname(file.originalname).toLowerCase();
-        const allowedExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.pdf', '.txt'];
-        if (!allowedExts.includes(ext)) {
-            return cb(new Error('Invalid file extension'), null);
-        }
-        cb(null, hash + ext);
-    }
-});
-
-const fileFilter = (req, file, cb) => {
-    const allowedTypes = [
-        'image/jpeg', 'image/png', 'image/gif', 'image/webp',
-        'application/pdf', 'text/plain', 'image/svg+xml'
-    ];
-    const maxSize = 5 * 1024 * 1024;
-    if (file.size > maxSize) {
-        return cb(new Error('File too large'), false);
-    }
-    if (allowedTypes.includes(file.mimetype)) {
-        cb(null, true);
-    } else {
-        cb(new Error('Unsupported file type'), false);
-    }
-};
-
-const upload = multer({
-    storage,
-    limits: { fileSize: 5 * 1024 * 1024 },
-    fileFilter
-});
+app.use(cookieParser(COOKIE_SECRET));
 
 // === БАЗА ДАННЫХ С ШИФРОВАНИЕМ ===
 const db = new sqlite3.Database('lantern_kitchen.db');
 
-// Функция для генерации соли для каждого пользователя
 function generateSalt() {
-    return crypto.randomBytes(32).toString('hex');
+    return crypto.randomBytes(64).toString('hex');
+}
+
+// Функция для очистки чувствительных данных
+function secureZeroBuffer(buffer) {
+    if (Buffer.isBuffer(buffer)) {
+        buffer.fill(0);
+    }
 }
 
 db.serialize(() => {
@@ -134,7 +146,8 @@ db.serialize(() => {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         last_login DATETIME,
         login_attempts INTEGER DEFAULT 0,
-        locked_until DATETIME
+        locked_until DATETIME,
+        tor_identity TEXT
     )`);
     
     db.run(`CREATE TABLE IF NOT EXISTS posts (
@@ -182,6 +195,7 @@ db.serialize(() => {
         expires_at DATETIME,
         ip_hash TEXT,
         user_agent TEXT,
+        session_id TEXT UNIQUE,
         FOREIGN KEY(user_id) REFERENCES users(id)
     )`);
     
@@ -189,27 +203,66 @@ db.serialize(() => {
     db.run(`CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at DESC)`);
     db.run(`CREATE INDEX IF NOT EXISTS idx_comments_post ON comments(post_id)`);
     db.run(`CREATE INDEX IF NOT EXISTS idx_messages_users ON messages(from_user, to_user)`);
+    db.run(`CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token)`);
 });
 
-// === УСИЛЕННАЯ АУТЕНТИФИКАЦИЯ ===
+// === АУТЕНТИФИКАЦИЯ С ЗАЩИТОЙ ОТ ПЕРЕХВАТА ===
 function authenticate(req, res, next) {
     const token = req.cookies.token;
     if (!token) {
         return res.status(401).json({ error: 'Unauthorized' });
     }
+    
     try {
-        const decoded = jwt.verify(token, JWT_SECRET);
-        // Проверяем, не истекла ли сессия в БД
-        db.get('SELECT * FROM sessions WHERE token = ? AND expires_at > datetime("now")', 
-            [token], (err, session) => {
+        const decoded = jwt.verify(token, JWT_SECRET, { 
+            algorithms: ['HS256'],
+            maxAge: '12h'
+        });
+        
+        db.get('SELECT * FROM sessions WHERE token = ? AND expires_at > datetime("now") AND user_id = ?',
+            [token, decoded.id], (err, session) => {
                 if (err || !session) {
                     return res.status(401).json({ error: 'Session expired' });
                 }
+                
+                // Проверяем IP и User-Agent
+                const ipHash = crypto.createHash('sha256').update(req.ip || '').digest('hex');
+                const uaHash = crypto.createHash('sha256').update(req.get('User-Agent') || '').digest('hex');
+                
+                if (session.ip_hash !== ipHash || session.user_agent !== uaHash) {
+                    // Возможный перехват сессии - удаляем её
+                    db.run('DELETE FROM sessions WHERE id = ?', [session.id]);
+                    res.clearCookie('token');
+                    return res.status(401).json({ error: 'Session hijacking detected' });
+                }
+                
                 req.user = decoded;
                 req.sessionId = session.id;
+                req.sessionToken = token;
+                
+                // Ротация токена для защиты от перехвата
+                if (Math.random() < 0.1) { // Ротация с вероятностью 10%
+                    const newToken = jwt.sign(
+                        { id: decoded.id, username: decoded.username, isAdmin: decoded.isAdmin },
+                        JWT_SECRET,
+                        { expiresIn: '12h' }
+                    );
+                    db.run('UPDATE sessions SET token = ?, expires_at = datetime("now", "+12 hours") WHERE id = ?',
+                        [newToken, session.id]);
+                    res.cookie('token', newToken, {
+                        httpOnly: true,
+                        secure: true,
+                        sameSite: 'strict',
+                        maxAge: 12 * 60 * 60 * 1000,
+                        path: '/'
+                    });
+                    req.sessionToken = newToken;
+                }
+                
                 next();
             });
     } catch (err) {
+        res.clearCookie('token');
         return res.status(401).json({ error: 'Invalid token' });
     }
 }
@@ -221,14 +274,32 @@ function isAdmin(req, res, next) {
     next();
 }
 
-// === ЗАЩИТА ОТ CSRF ДЛЯ ДАРКНЕТА ===
+// === CSRF ЗАЩИТА ДЛЯ .ONION ===
 function csrfProtect(req, res, next) {
-    // В даркнете разрешаем только same-origin
+    const methods = ['POST', 'PUT', 'DELETE', 'PATCH'];
+    if (!methods.includes(req.method)) return next();
+    
     const origin = req.get('Origin');
     const referer = req.get('Referer');
     const host = req.get('Host');
     
-    // Проверяем, что запрос идет с того же хоста
+    // Для .onion проверяем только referer
+    if (host && host.includes('.onion')) {
+        if (!referer) {
+            return res.status(403).json({ error: 'Missing referer' });
+        }
+        try {
+            const refererUrl = new URL(referer);
+            if (refererUrl.hostname !== host) {
+                return res.status(403).json({ error: 'Invalid referer' });
+            }
+        } catch {
+            return res.status(403).json({ error: 'Invalid referer' });
+        }
+        return next();
+    }
+    
+    // Для обычных сайтов проверяем origin
     if (origin) {
         try {
             const originUrl = new URL(origin);
@@ -240,59 +311,64 @@ function csrfProtect(req, res, next) {
         }
     }
     
-    // Для POST/PUT/DELETE запросов проверяем Referer
-    const methods = ['POST', 'PUT', 'DELETE', 'PATCH'];
-    if (methods.includes(req.method)) {
-        if (!referer) {
-            return res.status(403).json({ error: 'Missing referer' });
-        }
-        try {
-            const refererUrl = new URL(referer);
-            if (refererUrl.host !== host) {
-                return res.status(403).json({ error: 'Invalid referer' });
-            }
-        } catch {
+    if (!referer) {
+        return res.status(403).json({ error: 'Missing referer' });
+    }
+    try {
+        const refererUrl = new URL(referer);
+        if (refererUrl.host !== host) {
             return res.status(403).json({ error: 'Invalid referer' });
         }
+    } catch {
+        return res.status(403).json({ error: 'Invalid referer' });
     }
+    
     next();
 }
 
-// === ВАЛИДАЦИЯ ВХОДНЫХ ДАННЫХ ===
+// === ВАЛИДАЦИЯ ===
 const validate = (validations) => {
     return async (req, res, next) => {
         await Promise.all(validations.map(validation => validation.run(req)));
         const errors = validationResult(req);
-        if (errors.isEmpty()) {
-            return next();
-        }
-        res.status(400).json({ errors: errors.array() });
+        if (errors.isEmpty()) return next();
+        res.status(400).json({ errors: errors.array().map(e => e.msg) });
     };
 };
 
-// === API ===
+// === ОЧИСТКА ВХОДНЫХ ДАННЫХ ===
+function sanitizeInput(str) {
+    if (!str) return '';
+    return String(str)
+        .replace(/[<>]/g, '') // Удаляем потенциальные теги
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#x27;')
+        .replace(/\//g, '&#x2F;');
+}
 
-// Регистрация с защитой от ботов
-app.post('/api/register', registerLimiter, 
+// === API РЕГИСТРАЦИЯ ===
+app.post('/api/register', registerLimiter,
     validate([
         body('username')
             .isLength({ min: 3, max: 20 })
             .matches(/^[a-zA-Z0-9_]+$/)
             .withMessage('Username can only contain letters, numbers, underscore'),
         body('password')
-            .isLength({ min: 8 })
-            .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/)
-            .withMessage('Password must contain uppercase, lowercase and number')
+            .isLength({ min: 12 })
+            .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])/)
+            .withMessage('Password must contain uppercase, lowercase, number and special character')
     ]),
     async (req, res) => {
         const { username, password } = req.body;
+        const torIdentity = req.get('X-Tor-Identity') || 'unknown';
         
         try {
             const salt = generateSalt();
-            const hash = await bcrypt.hash(password + salt, 12);
+            const hash = await bcrypt.hash(password + salt, 14);
             
-            db.run('INSERT INTO users (username, password, salt) VALUES (?, ?, ?)',
-                [username, hash, salt],
+            db.run('INSERT INTO users (username, password, salt, tor_identity) VALUES (?, ?, ?, ?)',
+                [username, hash, salt, torIdentity],
                 function(err) {
                     if (err) {
                         if (err.message.includes('UNIQUE')) {
@@ -308,11 +384,11 @@ app.post('/api/register', registerLimiter,
     }
 );
 
-// Логин с защитой от брутфорса
-app.post('/api/login', strictLimiter,
+// === API ЛОГИН ===
+app.post('/api/login', authLimiter,
     validate([
         body('username').isLength({ min: 3, max: 20 }),
-        body('password').isLength({ min: 8 })
+        body('password').isLength({ min: 12 })
     ]),
     (req, res) => {
         const { username, password } = req.body;
@@ -323,43 +399,42 @@ app.post('/api/login', strictLimiter,
                     return res.status(401).json({ error: 'Invalid credentials' });
                 }
                 
-                // Проверка блокировки
                 if (user.locked_until && new Date(user.locked_until) > new Date()) {
                     return res.status(429).json({ error: 'Account locked. Try later.' });
                 }
                 
-                const match = await bcrypt.compare(password + user.salt, user.password);
-                if (!match) {
-                    // Увеличиваем счетчик неудачных попыток
+                const isValid = await secureCompareHash(password, user.password, user.salt);
+                
+                if (!isValid) {
                     const attempts = (user.login_attempts || 0) + 1;
                     let lockedUntil = null;
                     if (attempts >= 5) {
-                        lockedUntil = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+                        lockedUntil = new Date(Date.now() + 30 * 60 * 1000).toISOString();
                     }
                     db.run('UPDATE users SET login_attempts = ?, locked_until = ? WHERE id = ?',
                         [attempts, lockedUntil, user.id]);
                     return res.status(401).json({ error: 'Invalid credentials' });
                 }
                 
-                // Сброс счетчика попыток
                 db.run('UPDATE users SET login_attempts = 0, locked_until = NULL, last_login = datetime("now") WHERE id = ?',
                     [user.id]);
                 
+                const sessionId = crypto.randomBytes(32).toString('hex');
                 const token = jwt.sign(
-                    { id: user.id, username: user.username, isAdmin: user.isAdmin },
+                    { id: user.id, username: user.username, isAdmin: user.isAdmin, sessionId },
                     JWT_SECRET,
-                    { expiresIn: '12h' }
+                    { expiresIn: '12h', algorithm: 'HS256' }
                 );
                 
-                // Сохраняем сессию
                 const expiresAt = new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString();
-                db.run('INSERT INTO sessions (user_id, token, expires_at, ip_hash, user_agent) VALUES (?, ?, ?, ?, ?)',
-                    [user.id, token, expiresAt, 
-                     crypto.createHash('sha256').update(req.ip || '').digest('hex'),
-                     req.get('User-Agent') || ''],
+                const ipHash = crypto.createHash('sha256').update(req.ip || '').digest('hex');
+                const uaHash = crypto.createHash('sha256').update(req.get('User-Agent') || '').digest('hex');
+                
+                db.run('INSERT INTO sessions (user_id, token, expires_at, ip_hash, user_agent, session_id) VALUES (?, ?, ?, ?, ?, ?)',
+                    [user.id, token, expiresAt, ipHash, uaHash, sessionId],
                     (err) => {
                         if (err) {
-                            console.error('Session save error:', err);
+                            console.error('Session save error:', encryptLog(err.message));
                             return res.status(500).json({ error: 'Login failed' });
                         }
                         res.cookie('token', token, {
@@ -376,7 +451,7 @@ app.post('/api/login', strictLimiter,
     }
 );
 
-// Логаут с удалением сессии
+// === API ЛОГАУТ ===
 app.post('/api/logout', authenticate, (req, res) => {
     if (req.sessionId) {
         db.run('DELETE FROM sessions WHERE id = ?', [req.sessionId]);
@@ -390,7 +465,7 @@ app.post('/api/logout', authenticate, (req, res) => {
     res.json({ message: 'Logged out' });
 });
 
-// Получить текущего пользователя
+// === GET /API/ME ===
 app.get('/api/me', authenticate, (req, res) => {
     db.get('SELECT id, username, isAdmin FROM users WHERE id = ?', [req.user.id], (err, user) => {
         if (err || !user) return res.status(401).json({ error: 'Not found' });
@@ -398,9 +473,7 @@ app.get('/api/me', authenticate, (req, res) => {
     });
 });
 
-// === ПОСТЫ ===
-
-// Получить посты (публичные)
+// === GET /API/POSTS ===
 app.get('/api/posts/:section',
     validate([
         param('section').isString().isLength({ min: 1, max: 50 }),
@@ -430,7 +503,13 @@ app.get('/api/posts/:section',
             db.all(sql, [section, limit, offset], (err, posts) => {
                 if (err) return res.status(500).json({ error: 'DB error' });
                 res.json({
-                    posts: posts.map(p => ({ ...p, secret_hash: undefined, secret_salt: undefined })),
+                    posts: posts.map(p => ({ 
+                        ...p, 
+                        secret_hash: undefined, 
+                        secret_salt: undefined,
+                        content: sanitizeInput(p.content),
+                        title: sanitizeInput(p.title)
+                    })),
                     totalPages,
                     currentPage: page
                 });
@@ -439,7 +518,7 @@ app.get('/api/posts/:section',
     }
 );
 
-// Получить секретные посты
+// === POST /API/POSTS/SECRET ===
 app.post('/api/posts/secret', authenticate,
     validate([
         body('section').isString().isLength({ min: 1, max: 50 }),
@@ -460,9 +539,15 @@ app.post('/api/posts/secret', authenticate,
             const validPosts = [];
             for (const p of posts) {
                 if (p.secret_hash && p.secret_salt) {
-                    const match = await bcrypt.compare(password + p.secret_salt, p.secret_hash);
-                    if (match) {
-                        validPosts.push({ ...p, secret_hash: undefined, secret_salt: undefined });
+                    const isValid = await secureCompareHash(password, p.secret_hash, p.secret_salt);
+                    if (isValid) {
+                        validPosts.push({ 
+                            ...p, 
+                            secret_hash: undefined, 
+                            secret_salt: undefined,
+                            content: sanitizeInput(p.content),
+                            title: sanitizeInput(p.title)
+                        });
                     }
                 }
             }
@@ -471,8 +556,8 @@ app.post('/api/posts/secret', authenticate,
     }
 );
 
-// Создать пост
-app.post('/api/posts', authenticate, csrfProtect, upload.single('file'),
+// === POST /API/POSTS ===
+app.post('/api/posts', authenticate, csrfProtect, postLimiter, upload.single('file'),
     validate([
         body('section').isString().isLength({ min: 1, max: 50 }),
         body('title').optional().isString().isLength({ max: 200 }),
@@ -492,15 +577,15 @@ app.post('/api/posts', authenticate, csrfProtect, upload.single('file'),
         
         if (isSecret && secret_password) {
             secretSalt = generateSalt();
-            secretHash = bcrypt.hashSync(secret_password + secretSalt, 12);
+            secretHash = bcrypt.hashSync(secret_password + secretSalt, 14);
         }
 
         const sql = `INSERT INTO posts (section, title, content, file_path, is_secret, secret_hash, secret_salt, created_by)
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
-        db.run(sql, [section, title || '', content || '', filePath, isSecret, secretHash, secretSalt, req.user.id],
+        db.run(sql, [section, sanitizeInput(title || ''), sanitizeInput(content || ''), filePath, isSecret, secretHash, secretSalt, req.user.id],
             function(err) {
                 if (err) {
-                    console.error(err);
+                    console.error(encryptLog(err.message));
                     return res.status(500).json({ error: 'Failed to create post' });
                 }
                 res.status(201).json({ id: this.lastID, message: 'Post created' });
@@ -508,9 +593,7 @@ app.post('/api/posts', authenticate, csrfProtect, upload.single('file'),
     }
 );
 
-// === КОММЕНТАРИИ ===
-
-// Получить комментарии
+// === GET /API/COMMENTS ===
 app.get('/api/comments/:postId',
     validate([param('postId').isInt()]),
     (req, res) => {
@@ -524,12 +607,15 @@ app.get('/api/comments/:postId',
         `;
         db.all(sql, [postId], (err, comments) => {
             if (err) return res.status(500).json({ error: 'DB error' });
-            res.json(comments);
+            res.json(comments.map(c => ({
+                ...c,
+                content: sanitizeInput(c.content)
+            })));
         });
     }
 );
 
-// Создать комментарий
+// === POST /API/COMMENTS ===
 app.post('/api/comments', authenticate, csrfProtect,
     validate([
         body('postId').isInt(),
@@ -539,7 +625,7 @@ app.post('/api/comments', authenticate, csrfProtect,
         const { postId, content } = req.body;
 
         db.run('INSERT INTO comments (post_id, user_id, content) VALUES (?, ?, ?)',
-            [postId, req.user.id, content],
+            [postId, req.user.id, sanitizeInput(content)],
             function(err) {
                 if (err) return res.status(500).json({ error: 'DB error' });
                 res.status(201).json({ id: this.lastID });
@@ -548,7 +634,7 @@ app.post('/api/comments', authenticate, csrfProtect,
     }
 );
 
-// Редактировать комментарий
+// === PUT /API/COMMENTS ===
 app.put('/api/comments/:id', authenticate, csrfProtect,
     validate([
         param('id').isInt(),
@@ -564,7 +650,7 @@ app.put('/api/comments/:id', authenticate, csrfProtect,
                 return res.status(403).json({ error: 'Forbidden' });
             }
             db.run('UPDATE comments SET content = ?, updated_at = datetime("now") WHERE id = ?',
-                [content, id], function(err) {
+                [sanitizeInput(content), id], function(err) {
                     if (err) return res.status(500).json({ error: 'Update failed' });
                     res.json({ message: 'Updated' });
                 });
@@ -572,7 +658,7 @@ app.put('/api/comments/:id', authenticate, csrfProtect,
     }
 );
 
-// Удалить комментарий (только автор или админ)
+// === DELETE /API/COMMENTS ===
 app.delete('/api/comments/:id', authenticate, csrfProtect,
     validate([param('id').isInt()]),
     (req, res) => {
@@ -591,9 +677,7 @@ app.delete('/api/comments/:id', authenticate, csrfProtect,
     }
 );
 
-// === СООБЩЕНИЯ С ШИФРОВАНИЕМ ===
-
-// Получить сообщения
+// === GET /API/MESSAGES ===
 app.get('/api/messages', authenticate, (req, res) => {
     const sql = `
         SELECT m.*, u1.username as from_name, u2.username as to_name
@@ -606,16 +690,18 @@ app.get('/api/messages', authenticate, (req, res) => {
     `;
     db.all(sql, [req.user.id, req.user.id], (err, msgs) => {
         if (err) return res.status(500).json({ error: 'DB error' });
-        // Отмечаем как прочитанные
         const ids = msgs.filter(m => m.to_user === req.user.id && !m.read_at).map(m => m.id);
         if (ids.length) {
             db.run(`UPDATE messages SET read_at = datetime("now") WHERE id IN (${ids.map(() => '?').join(',')})`, ids);
         }
-        res.json(msgs);
+        res.json(msgs.map(m => ({
+            ...m,
+            encrypted_text: sanitizeInput(m.encrypted_text)
+        })));
     });
 });
 
-// Отправить сообщение
+// === POST /API/MESSAGES ===
 app.post('/api/messages', authenticate, csrfProtect,
     validate([
         body('toUserId').isInt(),
@@ -624,17 +710,16 @@ app.post('/api/messages', authenticate, csrfProtect,
     (req, res) => {
         const { toUserId, encryptedText } = req.body;
         
-        // Проверяем, существует ли получатель
         db.get('SELECT id FROM users WHERE id = ?', [toUserId], (err, user) => {
             if (err || !user) {
                 return res.status(404).json({ error: 'Recipient not found' });
             }
             
-            // Генерируем IV для шифрования
             const iv = crypto.randomBytes(16).toString('hex');
+            const encrypted = Buffer.from(encryptedText, 'utf8').toString('base64');
             
             db.run('INSERT INTO messages (from_user, to_user, encrypted_text, iv) VALUES (?, ?, ?, ?)',
-                [req.user.id, toUserId, encryptedText, iv],
+                [req.user.id, toUserId, encrypted, iv],
                 function(err) {
                     if (err) return res.status(500).json({ error: 'DB error' });
                     res.status(201).json({ id: this.lastID });
@@ -643,9 +728,7 @@ app.post('/api/messages', authenticate, csrfProtect,
     }
 );
 
-// === АДМИНКА ===
-
-// Получить всех пользователей
+// === GET /API/USERS ===
 app.get('/api/users', authenticate, isAdmin, (req, res) => {
     db.all('SELECT id, username, isAdmin, created_at, last_login FROM users ORDER BY id', (err, users) => {
         if (err) return res.status(500).json({ error: 'DB error' });
@@ -653,7 +736,7 @@ app.get('/api/users', authenticate, isAdmin, (req, res) => {
     });
 });
 
-// Назначить админа
+// === POST /API/MAKE-ADMIN ===
 app.post('/api/make-admin', authenticate, isAdmin, csrfProtect,
     validate([body('userId').isInt()]),
     (req, res) => {
@@ -670,7 +753,7 @@ app.post('/api/make-admin', authenticate, isAdmin, csrfProtect,
     }
 );
 
-// Удалить пост (только админ)
+// === DELETE /API/POSTS ===
 app.delete('/api/posts/:id', authenticate, isAdmin, csrfProtect,
     validate([param('id').isInt()]),
     (req, res) => {
@@ -683,9 +766,9 @@ app.delete('/api/posts/:id', authenticate, isAdmin, csrfProtect,
     }
 );
 
-// === ОБРАБОТКА ОШИБОК ===
+// === ОБРАБОТЧИК ОШИБОК ===
 app.use((err, req, res, next) => {
-    console.error('Error:', err);
+    console.error(encryptLog(err.message));
     if (err instanceof multer.MulterError) {
         if (err.code === 'FILE_TOO_LARGE') {
             return res.status(413).json({ error: 'File too large' });
@@ -699,4 +782,18 @@ app.use((err, req, res, next) => {
 app.listen(PORT, '127.0.0.1', () => {
     console.log(`🕯️ Lantern Kitchen running on http://127.0.0.1:${PORT}`);
     console.log('🔒 Security hardened for darknet deployment');
+    console.log(`🔑 JWT Secret: ${JWT_SECRET.substring(0, 10)}... (secure)`);
+});
+
+// === ЗАЩИТА ПРИ ЗАВЕРШЕНИИ ===
+process.on('SIGTERM', () => {
+    console.log('SIGTERM received, closing database...');
+    db.close();
+    process.exit(0);
+});
+
+process.on('SIGINT', () => {
+    console.log('SIGINT received, closing database...');
+    db.close();
+    process.exit(0);
 });
